@@ -1,0 +1,2 @@
+data/ModelNet40.zip filter=lfs diff=lfs merge=lfs -text
+data/ModelNet10.zip filter=lfs diff=lfs merge=lfs -text
