@@ -69,7 +69,11 @@ def process_dir(source: str, target: str, num_points: int) -> None:
             continue
 
         trimesh_data = trimesh.Trimesh(vertices=mesh_data.points, faces=mesh_data.cells_dict["triangle"])
-        points = sample_mesh(mesh_data=trimesh_data, num_points=num_points)
+        principal_inertia_transform = trimesh_data.principal_inertia_transform
+
+        transformed_mesh = trimesh_data.apply_transform(principal_inertia_transform)
+        points = sample_mesh(mesh_data=transformed_mesh, num_points=num_points)
+
         np.save(target.joinpath(file.stem), points)
 
 
