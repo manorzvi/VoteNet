@@ -69,12 +69,16 @@ def process_dir(source: str, target: str, num_points: int) -> None:
             continue
 
         trimesh_data = trimesh.Trimesh(vertices=mesh_data.points, faces=mesh_data.cells_dict["triangle"])
+
+        # To put the centroid in the origin
         principal_inertia_transform = trimesh_data.principal_inertia_transform
-
         transformed_mesh = trimesh_data.apply_transform(principal_inertia_transform)
-        points = sample_mesh(mesh_data=transformed_mesh, num_points=num_points)
+        bbox = transformed_mesh.bounding_box.vertices
 
-        np.save(target.joinpath(file.stem), points)
+        sampled_points = sample_mesh(mesh_data=transformed_mesh, num_points=num_points)
+
+        np.save(target.joinpath(file.stem + "_points"), sampled_points)
+        np.save(target.joinpath(file.stem + "_bbox"), bbox)
 
 
 if __name__ == "__main__":
