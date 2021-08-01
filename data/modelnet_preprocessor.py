@@ -33,7 +33,7 @@ class SuppressPrints(object):
             sys.stderr = self._original_stderr
 
 
-def sample_mesh(mesh_data: trimesh.Trimesh, num_points: int) -> np.ndarray:
+def sample_mesh_to_num_points(mesh_data: trimesh.Trimesh, num_points: int) -> np.ndarray:
     """
     Sample num_points from mesh and compute the normals at the points.
     :param mesh_data: trimesh object with a shape.
@@ -66,6 +66,7 @@ def process_dir(source: str, target: str, num_points: int) -> None:
         try:
             mesh_data = meshio.read(file)
         except meshio._exceptions.ReadError:
+            logger.warning(f"Error reading `{file.name}`. Skipping...")
             continue
 
         trimesh_data = trimesh.Trimesh(vertices=mesh_data.points, faces=mesh_data.cells_dict["triangle"])
@@ -73,20 +74,20 @@ def process_dir(source: str, target: str, num_points: int) -> None:
         # To put the centroid in the origin
         principal_inertia_transform = trimesh_data.principal_inertia_transform
         transformed_mesh = trimesh_data.apply_transform(principal_inertia_transform)
-        bbox = transformed_mesh.bounding_box.vertices
 
-        sampled_points = sample_mesh(mesh_data=transformed_mesh, num_points=num_points)
+        sampled_points = sample_mesh_to_num_points(mesh_data=transformed_mesh, num_points=num_points)
 
+        np.save(target.joinpath(file.stem + "_bbox"), transformed_mesh.bounding_box.vertices)
+        np.save(target.joinpath(file.stem + "_centroid"), transformed_mesh.centroid)
         np.save(target.joinpath(file.stem + "_points"), sampled_points)
-        np.save(target.joinpath(file.stem + "_bbox"), bbox)
-
+        
 
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--zip-dataset-path", type=Path, required=True, help="path to a zipped model-net dataset")
+    parser.add_argument("--zip-dataset-path", type=Path, required=True, help="Path to a zipped model-net dataset")
     parser.add_argument("--num-points", type=int, default=1024, help="#points (sampled) for each mesh")
-    parser.add_argument("--force", action="store_true", help="set to force preproceesing")
+    parser.add_argument("--force", action="store_true", help="Set to force pre-proceesing")
     opts = parser.parse_args()
 
     ds_path = opts.zip_dataset_path.expanduser()
@@ -109,7 +110,7 @@ if __name__ == "__main__":
         if not file.is_dir():
             continue
 
-        logger.info(f"Processing `{file.as_posix()}`")
+        logger.info(f"Processing `{file.name}`")
         for mode in ("train", "test"):
             processed_path = processed_ds_path.joinpath(file.name).joinpath(mode)
             processed_path.mkdir(parents=True, exist_ok=True)
