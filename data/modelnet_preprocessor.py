@@ -1,4 +1,5 @@
 import argparse
+import json
 import meshio
 import numpy as np
 import os
@@ -11,44 +12,46 @@ from loguru import logger
 from pathlib import Path
 
 
-class SuppressPrints(object):
-    def __init__(self, stdout: bool = True, stderr: bool = True):
-        self._out = stdout
-        self._err = stderr
+class MeshSampler(object):
+    class SuppressPrints(object):
+        def __init__(self, stdout: bool = True, stderr: bool = True):
+            self._out = stdout
+            self._err = stderr
 
-    def __enter__(self):
-        if self._out:
-            self._original_stdout = sys.stdout
-            sys.stdout = open(os.devnull, "w")
-        if self._err:
-            self._original_stderr = sys.stderr
-            sys.stderr = open(os.devnull, "w")
+        def __enter__(self):
+            if self._out:
+                self._original_stdout = sys.stdout
+                sys.stdout = open(os.devnull, "w")
+            if self._err:
+                self._original_stderr = sys.stderr
+                sys.stderr = open(os.devnull, "w")
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if self._out:
-            sys.stdout.close()
-            sys.stdout = self._original_stdout
-        if self._err:
-            sys.stderr.close()
-            sys.stderr = self._original_stderr
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            if self._out:
+                sys.stdout.close()
+                sys.stdout = self._original_stdout
+            if self._err:
+                sys.stderr.close()
+                sys.stderr = self._original_stderr
 
 
-def sample_mesh_to_num_points(mesh_data: trimesh.Trimesh, num_points: int) -> np.ndarray:
-    """
-    Sample num_points from mesh and compute the normals at the points.
-    :param mesh_data: trimesh object with a shape.
-    :param num_points: number of sampling points.
-    :return: sampled points as numpy array and the normals at the points.
-                The array is of size (num_points,6).
-    """
-    with SuppressPrints():
-        points, faces = trimesh.sample.sample_surface_even(mesh_data, num_points)
-        if points.shape[0] < num_points:
-            points, faces = trimesh.sample.sample_surface(mesh_data, num_points)
-    normals = mesh_data.face_normals[faces]
+    def __init__(self, mesh: meshio.Mesh, center_to_origin: bool = True):
+        mesh = trimesh.Trimesh(vertices=mesh.points, faces=mesh.cells_dict["triangle"])
+        if center_to_origin:
+            principal_inertia_transform = mesh.principal_inertia_transform
+            mesh = mesh.apply_transform(principal_inertia_transform)
+        self.mesh = mesh
 
-    samples = np.concatenate((points, normals), axis=1)
-    return samples
+    def __call__(self, num_points: int = 1024):
+        with self.SuppressPrints():
+            points, faces = trimesh.sample.sample_surface_even(self.mesh, num_points)
+            if points.shape[0] < num_points:
+                points, faces = trimesh.sample.sample_surface(self.mesh, num_points)
+        normals = self.mesh.face_normals[faces]
+        return points, normals
+
+    def get_mesh(self):
+        return self.mesh
 
 
 def process_dir(source: str, target: str, num_points: int) -> None:
@@ -62,25 +65,23 @@ def process_dir(source: str, target: str, num_points: int) -> None:
     :param num_points: number of points to sample.
     """
     for file in source.iterdir():
-
         try:
-            mesh_data = meshio.read(file)
+            mesh = meshio.read(file)
         except meshio._exceptions.ReadError:
-            logger.warning(f"Error reading `{file.name}`. Skipping...")
             continue
 
-        trimesh_data = trimesh.Trimesh(vertices=mesh_data.points, faces=mesh_data.cells_dict["triangle"])
+        mesh_sampler = MeshSampler(mesh, center_to_origin=True)
+        vertices, _ = mesh_sampler(num_points)
+        bbox = mesh_sampler.get_mesh().bounding_box_oriented.vertices
+        centeroid = mesh_sampler.get_mesh().centroid
 
-        # To put the centroid in the origin
-        principal_inertia_transform = trimesh_data.principal_inertia_transform
-        transformed_mesh = trimesh_data.apply_transform(principal_inertia_transform)
+        with open(target.joinpath(file.stem).with_suffix(".json"), "w") as f:
+            json.dump({
+                "vertices": vertices.tolist(),
+                "oriented_bbox": bbox.tolist(),
+                "centroid": centeroid.tolist()
+            }, f)
 
-        sampled_points = sample_mesh_to_num_points(mesh_data=transformed_mesh, num_points=num_points)
-
-        np.save(target.joinpath(file.stem + "_bbox"), transformed_mesh.bounding_box.vertices)
-        np.save(target.joinpath(file.stem + "_centroid"), transformed_mesh.centroid)
-        np.save(target.joinpath(file.stem + "_points"), sampled_points)
-        
 
 if __name__ == "__main__":
 
