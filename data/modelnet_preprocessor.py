@@ -80,7 +80,7 @@ def process_dir(source: str, target: str, num_points: int) -> None:
                 "vertices": vertices.tolist(),
                 "oriented_bbox": bbox.tolist(),
                 "centroid": centeroid.tolist()
-            }, f)
+            }, f, indent=4)
 
 
 if __name__ == "__main__":

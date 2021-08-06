@@ -6,7 +6,7 @@ import random
 import trimesh.transformations as trans
 
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List, Tuple, Union
 
 
 class Parser(object):
@@ -27,6 +27,11 @@ class Parser(object):
         data.add_argument("--shapes-str", type=str, action=Parser.ShapesStr, help="chair:2,table:1")
         data.add_argument("--num-scenes", type=int, default=10)
 
+        placement = parser.add_argument_group("placement")
+        placement.add_argument("--collision-tol", type=float, default=0.05)
+        placement.add_argument("--step-size", type=float, default=1.0)
+        placement.add_argument("--save-figure", action="store_true", default=False)
+
         scale = parser.add_argument_group("scale")
         scale.add_argument("--scale-min", type=float, default=1.0, help="FIXME: CURRENTLY NOT SUPPORTED")
         scale.add_argument("--scale-max", type=float, default=1.0, help="FIXME: CURRENTLY NOT SUPPORTED")
@@ -45,35 +50,115 @@ class Parser(object):
         return opts
 
 
+class PointcloudIntersect(object):
+
+    BBOX_PLANES_LAYOUT = (
+        ((0, 1, 2, 3), (4, 5, 6, 7)),
+        ((0, 1, 4, 5), (2, 3, 6, 7)),
+        ((0, 2, 4, 6), (1, 3, 5, 7)),
+    )
+
+    @staticmethod
+    def plane_coefficients(coords: np.ndarray) -> Tuple[np.ndarray, float]:
+        """
+        Computes the plane's coefficients for the given coordinates.
+        The plane's eq. is: a x + b y + c z + d = 0
+        :param coords: a numpy array of shape (m, 3) where m >= 3.
+        :return: tuple with plane's coefficients and its bias.
+        """
+        v1 = coords[2] - coords[0]
+        v2 = coords[1] - coords[0]
+        cp = np.cross(v1, v2)
+        a, b, c = cp
+        d = np.dot(cp, coords[2])
+        return np.asarray([a, b, c]), -d
+
+    @staticmethod
+    def above_or_below_plane(pcd: np.ndarray, plane_coords):
+        """
+        Compute whether each point in pointcloud is above/below a given plane.
+        :param plane_coords: coordinates on the plane (array of shape (m, 3), where m > 3).
+        :return: array of size (self.num_points,) with values in {-1, 1} indicating above/below plane.
+        """
+        coeff, bias = PointcloudIntersect.plane_coefficients(plane_coords)
+        above_or_below = np.sign((pcd @ coeff + bias) / np.linalg.norm(coeff))
+        return above_or_below
+
+    @staticmethod
+    def is_in_bbox(pcd: np.ndarray, bbox: np.ndarray, tolerance: float = 0.1):
+        num_points = pcd.shape[0]
+
+        # Assume all points in cube
+        coords_in_cube = np.ones(num_points)
+        # Iterate over 3 possible planes' pairs layouts
+        for layout in PointcloudIntersect.BBOX_PLANES_LAYOUT:
+            plane1_above_or_below = PointcloudIntersect.above_or_below_plane(pcd, bbox[layout[0], :])
+            plane2_above_or_below = PointcloudIntersect.above_or_below_plane(pcd, bbox[layout[1], :])
+            coords_in_cube *= (plane1_above_or_below * plane2_above_or_below < 0)
+
+        num_in_cube = np.sum(coords_in_cube)
+        return num_in_cube / num_points >= tolerance
+
+    @staticmethod
+    def is_in_bboxes(pcd: np.ndarray, bboxes: List[np.ndarray], tolerance: float = 0.1):
+        for bbox in bboxes:
+            if PointcloudIntersect.is_in_bbox(pcd, bbox, tolerance):
+                return True
+        return False
+
+    @staticmethod
+    def render(pcd: np.ndarray, bbox: np.ndarray = None):
+        fig = plt.figure(figsize=(10, 10))
+        ax = fig.add_subplot(projection='3d')
+        ax.scatter(pcd[:, 0], pcd[:, 1], pcd[:, 2], marker="o")
+        if bbox is not None:
+            ax.scatter(bbox[:, 0], bbox[:, 1], bbox[:, 2], marker="^")
+        ax.set_xlabel("X")
+        ax.set_ylabel("Y")
+        ax.set_zlabel("Z")
+        plt.show()
+
+    @staticmethod
+    def render_scene(pcd_list: List[np.ndarray], bboxes: List[np.ndarray], show: bool = True, save: Union[Path, str] = None):
+        fig = plt.figure(figsize=(10, 10))
+        ax = fig.add_subplot(projection='3d')
+        for pcd, bbox in zip(pcd_list, bboxes):
+            ax.scatter(pcd[:, 0], pcd[:, 1], pcd[:, 2], marker="o")
+            if bbox is not None:
+                ax.scatter(bbox[:, 0], bbox[:, 1], bbox[:, 2], marker="^")
+        ax.set_xlabel("X")
+        ax.set_ylabel("Y")
+        ax.set_zlabel("Z")
+        if save is not None:
+            plt.savefig(save)
+        if show:
+            plt.show()
+        plt.close()
+
+
 def set_seed(seed: int = None):
     if seed is not None:
         random.seed(seed)
         np.random.seed(seed)
 
 
-def get_random_files_list(shapes_dict: Dict[str, int]):
+def get_random_files_list(dataset_path: Path, shapes_dict: Dict[str, int], mode: str):
     objects_list = []
     for shape, quantity in shapes_dict.items():
-        path = opts.dataset_path.joinpath(shape).joinpath(mode)
-        files = [f.stem for f in path.iterdir()]
-        files_ids = [f.split("_")[1] for f in files]
-        sampled_ids = random.sample(files_ids, quantity)
-        sampled_files = [path.joinpath(shape + "_" + s) for s in sampled_ids]
+        path = dataset_path.joinpath(shape).joinpath(mode)
+        files = [f for f in path.iterdir()]
+        sampled_files = random.sample(files, quantity)
         objects_list.extend(sampled_files)
     return objects_list
 
 
-def get_pointcloud_by_path(path: Path) -> Path:
-    path = Path(str(path) + "_points.npy")
-    pc = np.load(path)
-    pc = pc[:, 0:3]
-    return pc
+def get_path_data(path: Path) -> Path:
+    with open(path, "r") as f:
+        data = json.load(f)
 
-
-def get_bbox_by_path(path: Path) -> Path:
-    path = Path(str(path) + "_bbox.npy")
-    bbox = np.load(path)
-    return bbox
+    pcd = np.asarray(data["vertices"])
+    bbox = np.asarray(data["oriented_bbox"])
+    return pcd, bbox, data["centroid"]
 
 
 def get_rotation_matrix(opts: argparse.Namespace):
@@ -87,15 +172,6 @@ def get_rotation_matrix(opts: argparse.Namespace):
     Rz = trans.rotation_matrix(gamma, zaxis)
     R = trans.concatenate_matrices(Rx, Ry, Rz)
     return R
-
-
-def scatter_pointcloud(pc: np.ndarray, bbox: np.ndarray = None):
-    fig = plt.figure()
-    ax = fig.add_subplot(projection='3d')
-    ax.scatter(pc[:, 0], pc[:, 1], pc[:, 2], marker="o")
-    if bbox is not None:
-        ax.scatter(bbox[:, 0], bbox[:, 1], bbox[:, 2], marker="^")
-    plt.show()
 
 
 def get_translation_matrix(opts: argparse.Namespace):
@@ -114,53 +190,46 @@ if __name__ == "__main__":
 
     opts = Parser.parse()
     set_seed(opts.seed)
-
-    mode = "test" if opts.test else "train"
+    opts.output_path.mkdir(parents=True, exist_ok=True)
 
     for i in range(opts.num_scenes):
 
-        objects_paths = get_random_files_list(opts.shapes_dict)
+        objects_paths = get_random_files_list(
+            dataset_path=opts.input_dataset_path, shapes_dict=opts.shapes_dict, mode=opts.mode
+        )
 
-        metadata = {
-            "objects": objects_paths,
-            "rotations": [],
-            "translations": [],
-        }
-
-        bbox_list = []
-        pointcloud = get_pointcloud_by_path(objects_paths[0])
-        bbox_list.append(get_bbox_by_path(objects_paths[0]))
-
-        for object_path in objects_paths[1:]:
+        pointclouds, bboxes = [], []
+        scene_data = []
+        for object_path in objects_paths:
 
             # Load Pointcloud
-            curr_pc = get_pointcloud_by_path(object_path)
-            curr_bbox = get_bbox_by_path(object_path)
+            pcd, bbox, _ = get_path_data(object_path)
 
             # Rotate Pointcloud
             R = get_rotation_matrix(opts)[0:3, 0:3]
-            metadata["rotations"].append(R)
-            curr_pc = np.matmul(R, curr_pc.T).T
-            curr_bbox = np.matmul(R, curr_bbox.T).T
+            pcd = np.matmul(R, pcd.T).T
+            bbox = np.matmul(R, bbox.T).T
 
             # Get the direction for placing object
             T = get_translation_matrix(opts)
-            translation_vector = T[0:3, -1]
-            placed = False
+            translate_v = opts.step_size * T[0:3, -1]
+            translate_v = translate_v[None, ...]
 
             # Try to place the object in direction
-            while not hop_place_object(curr_pc, bbox_list):
-                curr_pc = curr_pc + translation_vector
-                curr_bbox = curr_bbox + translation_vector
+            while PointcloudIntersect.is_in_bboxes(pcd, bboxes, tolerance=opts.collision_tol):
+                pcd += translate_v
+                bbox += translate_v
 
-            # Add the object to the overall pointcloud
-            # and the bbox to the bbox list of all objects.
-            pointcloud = np.concatenate((pointcloud, curr_pc), dim=0)
-            bbox_list.append(curr_bbox)
-            metadata["translations"].append(translation_vector)
+            pointclouds.append(pcd)
+            bboxes.append(bbox)
+            scene_data.append({
+                "object": str(object_path),
+                "pointcloud": pcd.tolist(),
+                "oriented_bbox": bbox.tolist()
+            })
 
-        unique_id = f"pointcloud_{str(i).zfill(5)}"
-        np.save(opts.output_path.joinpath(unique_id))
-        metadata_path = opts.output_path.joinpath(unique_id + "_metadata").with_suffix(".json")
-        with open(metadata_path, "w") as f:
-            json.dump(metadata, indent=4)
+        data_path = opts.output_path.joinpath(str(i).zfill(5))
+        pdf_path = data_path.with_suffix(".pdf") if opts.save_figure else None
+        PointcloudIntersect.render_scene(pointclouds, bboxes, show=False, save=pdf_path)
+        with open(data_path.with_suffix(".json"), "w") as f:
+            json.dump(scene_data, f, indent=4)
