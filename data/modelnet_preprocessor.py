@@ -34,7 +34,6 @@ class MeshSampler(object):
                 sys.stderr.close()
                 sys.stderr = self._original_stderr
 
-
     def __init__(self, mesh: meshio.Mesh, center_to_origin: bool = True):
         mesh = trimesh.Trimesh(vertices=mesh.points, faces=mesh.cells_dict["triangle"])
         if center_to_origin:
@@ -76,11 +75,11 @@ def process_dir(source: str, target: str, num_points: int) -> None:
         centeroid = mesh_sampler.get_mesh().centroid
 
         with open(target.joinpath(file.stem).with_suffix(".json"), "w") as f:
-            json.dump({
-                "vertices": vertices.tolist(),
-                "oriented_bbox": bbox.tolist(),
-                "centroid": centeroid.tolist()
-            }, f, indent=4)
+            json.dump(
+                {"vertices": vertices.tolist(), "oriented_bbox": bbox.tolist(), "centroid": centeroid.tolist()},
+                f,
+                indent=4,
+            )
 
 
 if __name__ == "__main__":
