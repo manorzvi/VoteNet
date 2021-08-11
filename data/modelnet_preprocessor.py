@@ -10,6 +10,7 @@ import zipfile
 
 from loguru import logger
 from pathlib import Path
+from pc_render import PointcloudRender
 
 
 class MeshSampler(object):
@@ -34,11 +35,25 @@ class MeshSampler(object):
                 sys.stderr.close()
                 sys.stderr = self._original_stderr
 
-    def __init__(self, mesh: meshio.Mesh, center_to_origin: bool = True):
-        mesh = trimesh.Trimesh(vertices=mesh.points, faces=mesh.cells_dict["triangle"])
+    def __init__(self, path: Path, center_to_origin: bool = True):
+        mesh = trimesh.load_mesh(path)
+
         if center_to_origin:
             principal_inertia_transform = mesh.principal_inertia_transform
             mesh = mesh.apply_transform(principal_inertia_transform)
+
+            bbox = np.asarray(mesh.bounding_box.vertices)
+            obbox = np.asarray(mesh.bounding_box_oriented.vertices)
+
+            pcr = PointcloudRender()
+            pcr.add_pcd(pcd=mesh.vertices)
+            pcr.add_bbox(bbox)
+            pcr.add_bbox(obbox)
+            pcr.render()
+
+            if not np.allclose(bbox, obbox, rtol=1e-2, atol=1e-3):
+                raise RuntimeError
+
         self.mesh = mesh
 
     def __call__(self, num_points: int = 1024):
@@ -63,13 +78,17 @@ def process_dir(source: str, target: str, num_points: int) -> None:
     :param target: target dir.
     :param num_points: number of points to sample.
     """
+    i = 0
     for file in source.iterdir():
-        try:
-            mesh = meshio.read(file)
-        except meshio._exceptions.ReadError:
+        if file.suffix != ".off":
             continue
 
-        mesh_sampler = MeshSampler(mesh, center_to_origin=True)
+        try:
+            mesh_sampler = MeshSampler(file, center_to_origin=True)
+        except RuntimeError:
+            i += 1
+            continue
+
         vertices, _ = mesh_sampler(num_points)
         bbox = mesh_sampler.get_mesh().bounding_box_oriented.vertices
         centeroid = mesh_sampler.get_mesh().centroid
@@ -80,6 +99,8 @@ def process_dir(source: str, target: str, num_points: int) -> None:
                 f,
                 indent=4,
             )
+
+    return i
 
 
 if __name__ == "__main__":
@@ -105,6 +126,7 @@ if __name__ == "__main__":
         shutil.rmtree(processed_ds_path, ignore_errors=True)
     processed_ds_path.mkdir(parents=True, exist_ok=True)
 
+    s = 0
     for file in ds_path_unzip_.iterdir():
 
         if not file.is_dir():
@@ -114,6 +136,8 @@ if __name__ == "__main__":
         for mode in ("train", "test"):
             processed_path = processed_ds_path.joinpath(file.name).joinpath(mode)
             processed_path.mkdir(parents=True, exist_ok=True)
-            process_dir(file.joinpath(mode), processed_path, opts.num_points)
+            i = process_dir(file.joinpath(mode), processed_path, opts.num_points)
+            s += i
 
     shutil.rmtree(ds_path_unzip)
+    print(s)
