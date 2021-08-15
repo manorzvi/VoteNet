@@ -110,7 +110,15 @@ if __name__ == "__main__":
 
             pointclouds.append(pcd)
             bboxes.append(bbox)
-            scene_data.append({"object": str(object_path), "pointcloud": pcd.tolist(), "oriented_bbox": bbox.tolist()})
+
+            centeroid = np.mean(bbox, axis=0)
+            x_size = bbox[:, 0].max() - bbox[:, 0].min()
+            y_size = bbox[:, 1].max() - bbox[:, 1].min()
+            z_size = bbox[:, 2].max() - bbox[:, 2].min()
+
+            shape_vec = np.concatenate((centeroid, np.asarray([x_size, y_size, z_size, 0])))
+
+            scene_data.append({"object": str(object_path), "pointcloud": pcd.tolist(), "bbox": bbox.tolist(), "shape_vec": shape_vec.tolist()})
 
         data_path = opts.output_path.joinpath(str(i).zfill(5))
         with open(data_path.with_suffix(".json"), "w") as f:
