@@ -13,6 +13,16 @@ from pathlib import Path
 from pc_render import PointcloudRender
 
 
+FILTERS = {
+    "bed": 4096,
+    "chair": 1024,
+    "toilet": 1024,
+    "sofa": 2048,
+    "table": 2048,
+    "bathtub": 1024,
+}
+
+
 class MeshSampler(object):
     class SuppressPrints(object):
         def __init__(self, stdout: bool = True, stderr: bool = True):
@@ -42,19 +52,12 @@ class MeshSampler(object):
             principal_inertia_transform = mesh.principal_inertia_transform
             mesh = mesh.apply_transform(principal_inertia_transform)
 
-            bbox = np.asarray(mesh.bounding_box.vertices)
-            obbox = np.asarray(mesh.bounding_box_oriented.vertices)
-
-            pcr = PointcloudRender()
-            pcr.add_pcd(pcd=mesh.vertices)
-            pcr.add_bbox(bbox)
-            pcr.add_bbox(obbox)
-            pcr.render()
-
-            if not np.allclose(bbox, obbox, rtol=1e-2, atol=1e-3):
-                raise RuntimeError
+            # pcr = PointcloudRender()
+            # pcr.add_pcd(pcd=mesh.vertices)
+            # pcr.render()
 
         self.mesh = mesh
+        self.n_vertices = len(mesh.vertices)
 
     def __call__(self, num_points: int = 1024):
         with self.SuppressPrints():
@@ -68,7 +71,7 @@ class MeshSampler(object):
         return self.mesh
 
 
-def process_dir(source: str, target: str, num_points: int) -> None:
+def process_dir(source: Path, mode: str, target: str, num_points: int) -> None:
     """
     Process files of a single dir.
      1. read file
@@ -78,19 +81,21 @@ def process_dir(source: str, target: str, num_points: int) -> None:
     :param target: target dir.
     :param num_points: number of points to sample.
     """
-    i = 0
-    for file in source.iterdir():
+    for file in source.joinpath(mode).iterdir():
         if file.suffix != ".off":
             continue
 
         try:
             mesh_sampler = MeshSampler(file, center_to_origin=True)
         except RuntimeError:
-            i += 1
+            continue
+
+        if mesh_sampler.n_vertices < FILTERS[source.name]:
             continue
 
         vertices, _ = mesh_sampler(num_points)
-        bbox = mesh_sampler.get_mesh().bounding_box_oriented.vertices
+        # bbox = mesh_sampler.get_mesh().bounding_box_oriented.vertices
+        bbox = mesh_sampler.get_mesh().bounding_box.vertices
         centeroid = mesh_sampler.get_mesh().centroid
 
         with open(target.joinpath(file.stem).with_suffix(".json"), "w") as f:
@@ -99,8 +104,6 @@ def process_dir(source: str, target: str, num_points: int) -> None:
                 f,
                 indent=4,
             )
-
-    return i
 
 
 if __name__ == "__main__":
@@ -126,18 +129,15 @@ if __name__ == "__main__":
         shutil.rmtree(processed_ds_path, ignore_errors=True)
     processed_ds_path.mkdir(parents=True, exist_ok=True)
 
-    s = 0
     for file in ds_path_unzip_.iterdir():
 
-        if not file.is_dir():
+        if not file.is_dir() or file.name not in FILTERS.keys():
             continue
 
         logger.info(f"Processing `{file.name}`")
         for mode in ("train", "test"):
             processed_path = processed_ds_path.joinpath(file.name).joinpath(mode)
             processed_path.mkdir(parents=True, exist_ok=True)
-            i = process_dir(file.joinpath(mode), processed_path, opts.num_points)
-            s += i
+            process_dir(file, mode, processed_path, opts.num_points)
 
     shutil.rmtree(ds_path_unzip)
-    print(s)
