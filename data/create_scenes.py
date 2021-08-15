@@ -5,6 +5,7 @@ import random
 
 from pathlib import Path
 from pc_placement import PointcloudPlacement
+from pc_render import PointcloudRender
 from pc_transforms import PointcloudTransforms
 from typing import Dict
 
@@ -25,11 +26,11 @@ class Parser(object):
         data.add_argument("--output-path", type=Path, required=True)
         data.add_argument("--mode", type=str, default="train", choices=("train", "test"))
         data.add_argument("--shapes-str", type=str, action=Parser.ShapesStr, help="chair:2,table:1")
-        data.add_argument("--num-scenes", type=int, default=1)
+        data.add_argument("--num-scenes", type=int, default=10)
 
         placement = parser.add_argument_group("placement")
-        placement.add_argument("--tolerance", type=float, default=0.05)
-        placement.add_argument("--step-size", type=float, default=10.0)
+        placement.add_argument("--tolerance", type=float, default=0.1)
+        placement.add_argument("--step-size", type=float, default=50.0)
         placement.add_argument("--save-figure", action="store_true", default=False)
 
         scale = parser.add_argument_group("scale")
@@ -37,13 +38,13 @@ class Parser(object):
         scale.add_argument("--scale-max", type=float, default=1.0, help="FIXME: CURRENTLY NOT SUPPORTED")
 
         rotate = parser.add_argument_group("rotate")
-        rotate.add_argument("--rotate-x", type=float, default=None)
-        rotate.add_argument("--rotate-y", type=float, default=None)
-        rotate.add_argument("--rotate-z", type=float, default=None)
+        rotate.add_argument("--rotate-x", type=float, default=0.0)
+        rotate.add_argument("--rotate-y", type=float, default=0.0)
+        rotate.add_argument("--rotate-z", type=float, default=0.0)
 
         translate = parser.add_argument_group("translate")
         translate.add_argument("--translate-x", type=float, default=None)
-        translate.add_argument("--translate-y", type=float, default=None)
+        translate.add_argument("--translate-y", type=float, default=0.0)
         translate.add_argument("--translate-z", type=float, default=0.0)
 
         opts = parser.parse_args()
@@ -112,7 +113,5 @@ if __name__ == "__main__":
             scene_data.append({"object": str(object_path), "pointcloud": pcd.tolist(), "oriented_bbox": bbox.tolist()})
 
         data_path = opts.output_path.joinpath(str(i).zfill(5))
-        pdf_path = data_path.with_suffix(".pdf") if opts.save_figure else None
-
         with open(data_path.with_suffix(".json"), "w") as f:
             json.dump(scene_data, f, indent=4)
